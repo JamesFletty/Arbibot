@@ -34,6 +34,27 @@ def _snapshot(event_id: str, ts: int, bid: float, ask: float) -> PolyBookSnapsho
     )
 
 
+def _snapshot_with_clock_skew(
+    event_id: str,
+    source_ts_ms: int,
+    recv_monotonic_ns: int,
+    bid: float,
+    ask: float,
+) -> PolyBookSnapshot:
+    return PolyBookSnapshot(
+        event_id=event_id,
+        source="polymarket",
+        source_ts_ms=source_ts_ms,
+        recv_wall_ts_ms=source_ts_ms + 7,
+        recv_monotonic_ns=recv_monotonic_ns,
+        market_id="m1",
+        outcome="UP",
+        token_id="token-up",
+        bids=[BookLevel(price=bid, size=100.0)],
+        asks=[BookLevel(price=ask, size=100.0)],
+    )
+
+
 def _delta(event_id: str, ts: int, price: float, size: float) -> PolyBookDelta:
     return PolyBookDelta(
         event_id=event_id,
@@ -81,10 +102,40 @@ def test_extract_repricing_cases_from_persisted_events(tmp_path: Path) -> None:
     assert result.summary.cases_emitted == 1
     case = result.cases[0]
     assert case.state.source_move_bps_100ms > 0
-    assert case.state.destination_book_age_ms == 500
+    assert case.state.destination_book_age_ms == 499
     assert case.state.time_to_expiry_ms == 8_000
     assert len(case.future_quotes) == 4
-    assert case.future_quotes[0].offset_ms == 50
+    assert case.future_quotes[0].offset_ms > 50
+    assert case.future_quotes[0].offset_ms < 50.001
+
+
+def test_bridge_uses_monotonic_time_despite_exchange_clock_skew(tmp_path: Path) -> None:
+    db = tmp_path / "events.sqlite3"
+    store = SQLiteEventStore(db)
+    try:
+        store.append_many(
+            [
+                _spot("s0", 1_000, 100.0),
+                _spot("s1", 1_500, 100.0),
+                _snapshot_with_clock_skew("p0", 50_000, 1_500_000_001, 0.49, 0.50),
+                _spot("s2", 2_000, 100.2),
+                _snapshot_with_clock_skew("p1", 70_000, 2_050_000_001, 0.491, 0.501),
+                _snapshot_with_clock_skew("p2", 80_000, 2_100_000_001, 0.492, 0.502),
+                _snapshot_with_clock_skew("p3", 90_000, 2_250_000_001, 0.493, 0.503),
+                _snapshot_with_clock_skew("p4", 100_000, 2_500_000_001, 0.494, 0.504),
+            ]
+        )
+        result = extract_repricing_cases(
+            store,
+            BridgeConfig(token_id="token-up", min_source_move_bps_100ms=5.0),
+        )
+    finally:
+        store.close()
+
+    assert result.summary.cases_emitted == 1
+    case = result.cases[0]
+    assert case.state.destination_book_age_ms == 499
+    assert 50 < case.future_quotes[0].offset_ms < 50.001
 
 
 def test_bridge_skips_delta_without_snapshot(tmp_path: Path) -> None:

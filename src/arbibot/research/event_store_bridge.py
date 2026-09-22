@@ -12,6 +12,8 @@ from arbibot.research.jev_repricing import RepricingState
 from arbibot.research.repricing_benchmark import DEFAULT_HORIZONS_MS, FutureQuote, RepricingCase
 from arbibot.storage.event_store import EventStore
 
+_NS_PER_MS = 1_000_000
+
 
 @dataclass(frozen=True, slots=True)
 class BridgeConfig:
@@ -37,6 +39,7 @@ class BookQuote:
     token_id: str
     source_ts_ms: int
     recv_wall_ts_ms: int
+    recv_monotonic_ns: int
     best_bid: float
     best_ask: float
     ask_depth: float
@@ -77,11 +80,11 @@ def _bps_return(new: float, old: float) -> float:
 
 
 def _prior_spot_price(
-    timestamps: list[int],
+    recv_times_ns: list[int],
     prices: list[float],
-    cutoff_ms: int,
+    cutoff_ns: int,
 ) -> float | None:
-    idx = bisect_right(timestamps, cutoff_ms) - 1
+    idx = bisect_right(recv_times_ns, cutoff_ns) - 1
     if idx < 0:
         return None
     return prices[idx]
@@ -89,10 +92,10 @@ def _prior_spot_price(
 
 def _quote_at_or_before(
     quotes: list[BookQuote],
-    timestamps: list[int],
-    ts_ms: int,
+    recv_times_ns: list[int],
+    recv_monotonic_ns: int,
 ) -> BookQuote | None:
-    idx = bisect_right(timestamps, ts_ms) - 1
+    idx = bisect_right(recv_times_ns, recv_monotonic_ns) - 1
     if idx < 0:
         return None
     return quotes[idx]
@@ -100,21 +103,22 @@ def _quote_at_or_before(
 
 def _future_quotes(
     quotes: list[BookQuote],
-    timestamps: list[int],
-    ts_ms: int,
+    recv_times_ns: list[int],
+    recv_monotonic_ns: int,
     horizons_ms: tuple[int, ...],
 ) -> tuple[FutureQuote, ...]:
     result: list[FutureQuote] = []
     seen_indices: set[int] = set()
-    for horizon in horizons_ms:
-        idx = bisect_left(timestamps, ts_ms + horizon)
+    for horizon_ms in horizons_ms:
+        target_ns = recv_monotonic_ns + horizon_ms * _NS_PER_MS
+        idx = bisect_left(recv_times_ns, target_ns)
         if idx >= len(quotes) or idx in seen_indices:
             continue
         seen_indices.add(idx)
         quote = quotes[idx]
         result.append(
             FutureQuote(
-                offset_ms=quote.source_ts_ms - ts_ms,
+                offset_ms=(quote.recv_monotonic_ns - recv_monotonic_ns) / _NS_PER_MS,
                 best_bid=quote.best_bid,
                 best_ask=quote.best_ask,
             )
@@ -124,6 +128,9 @@ def _future_quotes(
 
 def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeResult:
     """Convert persisted spot/book events into replayable repricing benchmark cases.
+
+    Cross-venue sequencing uses the local monotonic receive clock. Exchange source timestamps are
+    not comparable across venues and must not be used to infer reaction latency.
 
     `estimated_edge_bps` is intentionally a research proxy: the absolute difference between the
     100 ms source move and the destination market's 100 ms move. It is not a fair-value estimate
@@ -176,6 +183,7 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
                     token_id=token_id,
                     source_ts_ms=event.source_ts_ms,
                     recv_wall_ts_ms=event.recv_wall_ts_ms,
+                    recv_monotonic_ns=event.recv_monotonic_ns,
                     best_bid=float(bid.price),
                     best_ask=float(ask.price),
                     ask_depth=float(book.depth("ask", levels=3)),
@@ -184,11 +192,11 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
         except (json.JSONDecodeError, ValidationError, TypeError, ValueError):
             malformed_events += 1
 
-    spot_ticks.sort(key=lambda tick: (tick.source_ts_ms, tick.recv_wall_ts_ms))
-    spot_ts = [tick.source_ts_ms for tick in spot_ticks]
+    spot_ticks.sort(key=lambda tick: tick.recv_monotonic_ns)
+    spot_recv_ns = [tick.recv_monotonic_ns for tick in spot_ticks]
     spot_prices = [tick.price for tick in spot_ticks]
     for token_quotes in quotes_by_token.values():
-        token_quotes.sort(key=lambda quote: (quote.source_ts_ms, quote.recv_wall_ts_ms))
+        token_quotes.sort(key=lambda quote: quote.recv_monotonic_ns)
 
     cases: list[RepricingCase] = []
     skipped_no_history = 0
@@ -196,8 +204,16 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
     skipped_no_future_quote = 0
 
     for idx, tick in enumerate(spot_ticks):
-        prior_100 = _prior_spot_price(spot_ts, spot_prices, tick.source_ts_ms - 100)
-        prior_500 = _prior_spot_price(spot_ts, spot_prices, tick.source_ts_ms - 500)
+        prior_100 = _prior_spot_price(
+            spot_recv_ns,
+            spot_prices,
+            tick.recv_monotonic_ns - 100 * _NS_PER_MS,
+        )
+        prior_500 = _prior_spot_price(
+            spot_recv_ns,
+            spot_prices,
+            tick.recv_monotonic_ns - 500 * _NS_PER_MS,
+        )
         if prior_100 is None or prior_500 is None:
             skipped_no_history += 1
             continue
@@ -218,9 +234,17 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
             if not quotes:
                 skipped_no_book += 1
                 continue
-            quote_ts = [quote.source_ts_ms for quote in quotes]
-            current_quote = _quote_at_or_before(quotes, quote_ts, tick.source_ts_ms)
-            prior_quote = _quote_at_or_before(quotes, quote_ts, tick.source_ts_ms - 100)
+            quote_recv_ns = [quote.recv_monotonic_ns for quote in quotes]
+            current_quote = _quote_at_or_before(
+                quotes,
+                quote_recv_ns,
+                tick.recv_monotonic_ns,
+            )
+            prior_quote = _quote_at_or_before(
+                quotes,
+                quote_recv_ns,
+                tick.recv_monotonic_ns - 100 * _NS_PER_MS,
+            )
             if current_quote is None:
                 skipped_no_book += 1
                 continue
@@ -228,7 +252,12 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
             if prior_quote is not None:
                 destination_100 = _bps_return(current_quote.mid, prior_quote.mid)
 
-            future = _future_quotes(quotes, quote_ts, tick.source_ts_ms, config.horizons_ms)
+            future = _future_quotes(
+                quotes,
+                quote_recv_ns,
+                tick.recv_monotonic_ns,
+                config.horizons_ms,
+            )
             if not future:
                 skipped_no_future_quote += 1
                 continue
@@ -252,7 +281,7 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
                 destination_best_ask=current_quote.best_ask,
                 destination_depth_ask=current_quote.ask_depth,
                 destination_book_age_ms=max(
-                    tick.source_ts_ms - current_quote.source_ts_ms,
+                    int((tick.recv_monotonic_ns - current_quote.recv_monotonic_ns) / _NS_PER_MS),
                     0,
                 ),
                 source_event_age_ms=max(tick.recv_wall_ts_ms - tick.source_ts_ms, 0),
