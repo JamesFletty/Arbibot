@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
-from decimal import Decimal
 
 from pydantic import ValidationError
 
@@ -88,7 +87,11 @@ def _prior_spot_price(
     return prices[idx]
 
 
-def _quote_at_or_before(quotes: list[BookQuote], timestamps: list[int], ts_ms: int) -> BookQuote | None:
+def _quote_at_or_before(
+    quotes: list[BookQuote],
+    timestamps: list[int],
+    ts_ms: int,
+) -> BookQuote | None:
     idx = bisect_right(timestamps, ts_ms) - 1
     if idx < 0:
         return None
@@ -135,7 +138,8 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
     malformed_events = 0
     book_events_seen = 0
 
-    for stored in store.iter_events(event_types=["SpotTick", "PolyBookSnapshot", "PolyBookDelta"]):
+    event_types = ["SpotTick", "PolyBookSnapshot", "PolyBookDelta"]
+    for stored in store.iter_events(event_types=event_types):
         try:
             payload = json.loads(stored.payload_json)
             if stored.event_type == "SpotTick":
@@ -202,7 +206,11 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
         if abs(source_100) < config.min_source_move_bps_100ms:
             continue
 
-        candidate_tokens = [config.token_id] if config.token_id is not None else list(quotes_by_token)
+        candidate_tokens = (
+            [config.token_id]
+            if config.token_id is not None
+            else list(quotes_by_token)
+        )
         for token_id in candidate_tokens:
             if token_id is None:
                 continue
@@ -226,7 +234,11 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
                 continue
 
             lag_gap_bps = abs(source_100 - destination_100)
-            expected_cost_bps = current_quote.spread_bps + config.fee_cost_bps + config.extra_cost_bps
+            expected_cost_bps = (
+                current_quote.spread_bps
+                + config.fee_cost_bps
+                + config.extra_cost_bps
+            )
             expiry_ms = (
                 max(config.market_expiry_ts_ms - tick.source_ts_ms, 0)
                 if config.market_expiry_ts_ms is not None
@@ -239,7 +251,10 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
                 destination_best_bid=current_quote.best_bid,
                 destination_best_ask=current_quote.best_ask,
                 destination_depth_ask=current_quote.ask_depth,
-                destination_book_age_ms=max(tick.source_ts_ms - current_quote.source_ts_ms, 0),
+                destination_book_age_ms=max(
+                    tick.source_ts_ms - current_quote.source_ts_ms,
+                    0,
+                ),
                 source_event_age_ms=max(tick.recv_wall_ts_ms - tick.source_ts_ms, 0),
                 estimated_edge_bps=lag_gap_bps,
                 expected_cost_bps=expected_cost_bps,
