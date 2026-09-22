@@ -64,6 +64,16 @@ class _PassingJudge:
         )
 
 
+class _SlowPassingJudge:
+    def judge(self, state: RepricingState) -> JevGateResult:
+        return JevGateResult(
+            genuine_lag_probability=0.9,
+            adverse_selection_probability=0.1,
+            executable_probability=0.9,
+            model_latency_ms=125.0,
+        )
+
+
 def test_evaluate_cases_runs_jev_only_after_deterministic_gate() -> None:
     evaluations = evaluate_cases([_case()], jev_judge=_PassingJudge(), horizons_ms=(100,))
     assert evaluations[0].deterministic_candidate is True
@@ -78,4 +88,17 @@ def test_build_report_compares_deterministic_and_jev_arms() -> None:
     assert report.deterministic[100].repricing_hits == 1
     assert report.jev is not None
     assert report.jev[100].candidates == 1
+    assert report.jev[100].latency_eligible_candidates == 1
+    assert report.jev[100].latency_disqualified_candidates == 0
     assert report.jev[100].mean_model_latency_ms == 17.0
+
+
+def test_jev_candidate_is_disqualified_when_model_is_slower_than_horizon() -> None:
+    evaluations = evaluate_cases([_case()], jev_judge=_SlowPassingJudge(), horizons_ms=(100,))
+    report = build_report(evaluations, horizons_ms=(100,), include_jev=True)
+    assert report.jev is not None
+    assert report.jev[100].candidates == 1
+    assert report.jev[100].latency_eligible_candidates == 0
+    assert report.jev[100].latency_disqualified_candidates == 1
+    assert report.jev[100].labeled == 0
+    assert report.jev[100].precision is None
