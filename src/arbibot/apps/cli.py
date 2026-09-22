@@ -7,6 +7,7 @@ from arbibot.apps.commands import (
     run_paper,
     run_record_binance,
     run_record_polymarket,
+    run_record_session,
     run_replay,
     run_status,
     run_validate_config,
@@ -64,6 +65,17 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--json", action="store_true")
     rp.add_argument("--dry-run", action="store_true")
 
+    rs = sub.add_parser("record-session")
+    rs.add_argument("--store", default="data/events.sqlite3")
+    rs.add_argument("--symbol", default="BTCUSDT")
+    rs.add_argument("--binance-stream", action="append", default=None)
+    rs.add_argument("--token-id", action="append", required=True)
+    rs.add_argument("--outcome", choices=["UP", "DOWN"])
+    rs.add_argument("--duration-seconds", type=int)
+    rs.add_argument("--max-events", type=int)
+    rs.add_argument("--json", action="store_true")
+    rs.add_argument("--dry-run", action="store_true")
+
     br = sub.add_parser("benchmark-repricing")
     br.add_argument("--store", required=True)
     br.add_argument("--symbol", default="BTCUSDT")
@@ -119,6 +131,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "record-polymarket":
         return run_record_polymarket(
             store_path=args.store,
+            token_ids=args.token_id,
+            outcome=args.outcome,
+            duration_seconds=args.duration_seconds,
+            max_events=args.max_events,
+            as_json=args.json,
+            dry_run=args.dry_run,
+        )
+    if args.command == "record-session":
+        return run_record_session(
+            store_path=args.store,
+            symbol=args.symbol,
+            binance_streams=args.binance_stream or ["aggTrade"],
             token_ids=args.token_id,
             outcome=args.outcome,
             duration_seconds=args.duration_seconds,
