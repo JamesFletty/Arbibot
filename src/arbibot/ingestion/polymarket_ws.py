@@ -112,7 +112,7 @@ def parse_polymarket_payload(
         changes = payload.get("price_changes")
         if not market_id or not isinstance(changes, list):
             raise PolymarketPayloadError("price_change requires market and price_changes")
-        events: list[PolyBookDelta] = []
+        events: list[PolyBookSnapshot | PolyBookDelta] = []
         for index, raw_change in enumerate(changes):
             if not isinstance(raw_change, dict):
                 raise PolymarketPayloadError("price_changes entries must be objects")
