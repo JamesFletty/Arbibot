@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from statistics import mean
-from typing import Iterable
 
 from arbibot.research.jev_repricing import (
     DeterministicLagGate,
@@ -153,9 +153,9 @@ def _metrics_for_arm(
 ) -> ArmMetrics:
     selected: list[CaseEvaluation] = []
     for evaluation in evaluations:
-        if arm == "deterministic" and evaluation.deterministic_candidate:
-            selected.append(evaluation)
-        elif arm == "jev" and evaluation.jev_candidate is True:
+        matches_deterministic = arm == "deterministic" and evaluation.deterministic_candidate
+        matches_jev = arm == "jev" and evaluation.jev_candidate is True
+        if matches_deterministic or matches_jev:
             selected.append(evaluation)
 
     labels: list[HorizonLabel] = []
