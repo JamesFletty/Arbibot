@@ -81,6 +81,8 @@ def build_parser() -> argparse.ArgumentParser:
     br.add_argument("--symbol", default="BTCUSDT")
     br.add_argument("--token-id")
     br.add_argument("--market-expiry-ts-ms", type=int)
+    br.add_argument("--threshold-price", type=float)
+    br.add_argument("--outcome-side", choices=["UP", "DOWN"])
     br.add_argument("--fee-cost-bps", type=float, default=0.0)
     br.add_argument("--extra-cost-bps", type=float, default=0.0)
     br.add_argument("--min-source-move-bps-100ms", type=float, default=5.0)
@@ -156,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
             symbol=args.symbol,
             token_id=args.token_id,
             market_expiry_ts_ms=args.market_expiry_ts_ms,
+            threshold_price=args.threshold_price,
+            outcome_side=args.outcome_side,
             fee_cost_bps=args.fee_cost_bps,
             extra_cost_bps=args.extra_cost_bps,
             min_source_move_bps_100ms=args.min_source_move_bps_100ms,

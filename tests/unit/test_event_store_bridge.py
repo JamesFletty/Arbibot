@@ -1,6 +1,9 @@
 from pathlib import Path
 
+import pytest
+
 from arbibot.core.events import BookLevel, PolyBookDelta, PolyBookSnapshot, SpotTick
+from arbibot.opportunity.edge import OutcomeSide
 from arbibot.research.event_store_bridge import BridgeConfig, extract_repricing_cases
 from arbibot.storage.sqlite_store import SQLiteEventStore
 
@@ -71,28 +74,35 @@ def _delta(event_id: str, ts: int, price: float, size: float) -> PolyBookDelta:
     )
 
 
-def test_extract_repricing_cases_from_persisted_events(tmp_path: Path) -> None:
+def _seed_bridge_events(store: SQLiteEventStore) -> None:
+    store.append_many(
+        [
+            _spot("s0", 1_000, 100.0),
+            _spot("s1", 1_500, 100.0),
+            _snapshot("p0", 1_500, 0.49, 0.50),
+            _spot("s2", 2_000, 100.2),
+            _snapshot("p1", 2_050, 0.491, 0.501),
+            _snapshot("p2", 2_100, 0.492, 0.502),
+            _snapshot("p3", 2_250, 0.493, 0.503),
+            _snapshot("p4", 2_500, 0.494, 0.504),
+        ]
+    )
+
+
+def test_extract_fair_edge_case_from_persisted_events(tmp_path: Path) -> None:
     db = tmp_path / "events.sqlite3"
     store = SQLiteEventStore(db)
     try:
-        store.append_many(
-            [
-                _spot("s0", 1_000, 100.0),
-                _spot("s1", 1_500, 100.0),
-                _snapshot("p0", 1_500, 0.49, 0.50),
-                _spot("s2", 2_000, 100.2),
-                _snapshot("p1", 2_050, 0.491, 0.501),
-                _snapshot("p2", 2_100, 0.492, 0.502),
-                _snapshot("p3", 2_250, 0.493, 0.503),
-                _snapshot("p4", 2_500, 0.494, 0.504),
-            ]
-        )
+        _seed_bridge_events(store)
         result = extract_repricing_cases(
             store,
             BridgeConfig(
                 token_id="token-up",
                 min_source_move_bps_100ms=5.0,
                 market_expiry_ts_ms=10_000,
+                threshold_price=100.0,
+                outcome_side=OutcomeSide.UP,
+                fee_cost_bps=2.0,
             ),
         )
     finally:
@@ -104,9 +114,33 @@ def test_extract_repricing_cases_from_persisted_events(tmp_path: Path) -> None:
     assert case.state.source_move_bps_100ms > 0
     assert case.state.destination_book_age_ms == 499
     assert case.state.time_to_expiry_ms == 8_000
+    assert case.state.edge_basis == "fair_probability"
+    assert case.state.expected_cost_bps == 2.0
+    assert case.state.estimated_edge_bps > 0
     assert len(case.future_quotes) == 4
-    assert case.future_quotes[0].offset_ms > 50
-    assert case.future_quotes[0].offset_ms < 50.001
+    assert 50 < case.future_quotes[0].offset_ms < 50.001
+
+
+def test_bridge_lag_only_mode_does_not_claim_executable_edge(tmp_path: Path) -> None:
+    db = tmp_path / "events.sqlite3"
+    store = SQLiteEventStore(db)
+    try:
+        _seed_bridge_events(store)
+        result = extract_repricing_cases(
+            store,
+            BridgeConfig(token_id="token-up", min_source_move_bps_100ms=5.0),
+        )
+    finally:
+        store.close()
+
+    assert result.summary.cases_emitted == 1
+    assert result.cases[0].state.edge_basis == "lag_proxy"
+    assert result.cases[0].state.has_executable_edge_basis is False
+
+
+def test_bridge_requires_complete_fair_edge_inputs() -> None:
+    with pytest.raises(ValueError, match="fair edge requires"):
+        BridgeConfig(market_expiry_ts_ms=10_000)
 
 
 def test_bridge_uses_monotonic_time_despite_exchange_clock_skew(tmp_path: Path) -> None:

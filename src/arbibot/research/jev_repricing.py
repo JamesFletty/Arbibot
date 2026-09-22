@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 @dataclass(frozen=True, slots=True)
 class RepricingState:
-    """Minimal, replayable state for testing source->destination repricing lag."""
+    """Minimal, replayable state for source->destination repricing research."""
 
     source_move_bps_100ms: float
     source_move_bps_500ms: float
@@ -20,6 +20,7 @@ class RepricingState:
     estimated_edge_bps: float
     expected_cost_bps: float
     time_to_expiry_ms: int
+    edge_basis: str = "fair_probability"
 
     @property
     def net_edge_bps(self) -> float:
@@ -32,7 +33,11 @@ class RepricingState:
             return float("inf")
         return ((self.destination_best_ask - self.destination_best_bid) / mid) * 10_000
 
-    def as_model_state(self) -> dict[str, float | int]:
+    @property
+    def has_executable_edge_basis(self) -> bool:
+        return self.edge_basis == "fair_probability"
+
+    def as_model_state(self) -> dict[str, float | int | str]:
         return {
             "source_move_bps_100ms": self.source_move_bps_100ms,
             "source_move_bps_500ms": self.source_move_bps_500ms,
@@ -47,6 +52,7 @@ class RepricingState:
             "net_edge_bps": self.net_edge_bps,
             "spread_bps": self.spread_bps,
             "time_to_expiry_ms": self.time_to_expiry_ms,
+            "edge_basis": self.edge_basis,
         }
 
 
@@ -57,7 +63,34 @@ class DeterministicGateResult:
 
 
 @dataclass(frozen=True, slots=True)
+class LagMeasurementGate:
+    """Select clean lag observations without pretending a lag proxy is executable edge."""
+
+    min_source_move_bps_100ms: float = 5.0
+    max_book_age_ms: int = 250
+    max_source_age_ms: int = 100
+    min_ask_depth: float = 25.0
+    min_time_to_expiry_ms: int = 15_000
+
+    def evaluate(self, state: RepricingState) -> DeterministicGateResult:
+        reasons: list[str] = []
+        if abs(state.source_move_bps_100ms) < self.min_source_move_bps_100ms:
+            reasons.append("SOURCE_MOVE_TOO_SMALL")
+        if state.destination_book_age_ms > self.max_book_age_ms:
+            reasons.append("DESTINATION_BOOK_STALE")
+        if state.source_event_age_ms > self.max_source_age_ms:
+            reasons.append("SOURCE_EVENT_STALE")
+        if state.destination_depth_ask < self.min_ask_depth:
+            reasons.append("INSUFFICIENT_ASK_DEPTH")
+        if state.time_to_expiry_ms < self.min_time_to_expiry_ms:
+            reasons.append("TOO_CLOSE_TO_EXPIRY")
+        return DeterministicGateResult(not reasons, tuple(reasons))
+
+
+@dataclass(frozen=True, slots=True)
 class DeterministicLagGate:
+    """Executable-edge gate; requires a fair-probability edge basis."""
+
     min_source_move_bps_100ms: float = 5.0
     min_net_edge_bps: float = 10.0
     max_book_age_ms: int = 250
@@ -67,6 +100,8 @@ class DeterministicLagGate:
 
     def evaluate(self, state: RepricingState) -> DeterministicGateResult:
         reasons: list[str] = []
+        if not state.has_executable_edge_basis:
+            reasons.append("EDGE_BASIS_NOT_EXECUTABLE")
         if abs(state.source_move_bps_100ms) < self.min_source_move_bps_100ms:
             reasons.append("SOURCE_MOVE_TOO_SMALL")
         if state.net_edge_bps < self.min_net_edge_bps:
@@ -145,18 +180,16 @@ class RepricingJudge(Protocol):
 
 
 class JevRepricingGate:
-    """Research-only Jev adapter.
-
-    This deliberately uses the official TypeSafe Python SDK and must stay outside the
-    deterministic hot decision path. The point is to measure whether Jev's judgment
-    improves selection enough to justify its network latency.
-    """
+    """Research-only Jev adapter for states with a real fair-probability edge basis."""
 
     def __init__(self, client: Any | None = None, *, model: str = "jev-latest") -> None:
         self._client = client
         self._model = model
 
     def judge(self, state: RepricingState) -> JevGateResult:
+        if not state.has_executable_edge_basis:
+            raise ValueError("Jev executable gating requires edge_basis='fair_probability'")
+
         client = self._client
         owns_client = client is None
         if client is None:
@@ -192,8 +225,8 @@ class JevRepricingGate:
             ),
             "executable": Noul(
                 instructions=(
-                    "Given the supplied spread, depth, edge, data ages, and expiry, is the "
-                    "apparent repricing edge likely executable before it disappears?"
+                    "Given the supplied spread, depth, fair-probability edge, data ages, "
+                    "and expiry, is the repricing edge likely executable before it disappears?"
                 )
             ),
         }

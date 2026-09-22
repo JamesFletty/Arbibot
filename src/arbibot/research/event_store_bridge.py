@@ -3,11 +3,15 @@ from __future__ import annotations
 import json
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
+from decimal import Decimal
+from math import log, sqrt
 
 from pydantic import ValidationError
 
 from arbibot.core.events import PolyBookDelta, PolyBookSnapshot, SpotTick
 from arbibot.market.book import LocalOrderBook
+from arbibot.model.fair_price import FairPriceInput, FairPriceModel
+from arbibot.opportunity.edge import OutcomeSide
 from arbibot.research.jev_repricing import RepricingState
 from arbibot.research.repricing_benchmark import DEFAULT_HORIZONS_MS, FutureQuote, RepricingCase
 from arbibot.storage.event_store import EventStore
@@ -20,6 +24,8 @@ class BridgeConfig:
     symbol: str = "BTCUSDT"
     token_id: str | None = None
     market_expiry_ts_ms: int | None = None
+    threshold_price: float | None = None
+    outcome_side: OutcomeSide | None = None
     horizons_ms: tuple[int, ...] = DEFAULT_HORIZONS_MS
     fee_cost_bps: float = 0.0
     extra_cost_bps: float = 0.0
@@ -32,6 +38,25 @@ class BridgeConfig:
             raise ValueError("cost inputs must be non-negative")
         if self.min_source_move_bps_100ms < 0:
             raise ValueError("min_source_move_bps_100ms must be non-negative")
+        fair_fields = (
+            self.market_expiry_ts_ms is not None,
+            self.threshold_price is not None,
+            self.outcome_side is not None,
+        )
+        if any(fair_fields) and not all(fair_fields):
+            raise ValueError(
+                "fair edge requires market_expiry_ts_ms, threshold_price, and outcome_side"
+            )
+        if self.threshold_price is not None and self.threshold_price <= 0:
+            raise ValueError("threshold_price must be > 0")
+
+    @property
+    def has_fair_edge_inputs(self) -> bool:
+        return (
+            self.market_expiry_ts_ms is not None
+            and self.threshold_price is not None
+            and self.outcome_side is not None
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,12 +72,6 @@ class BookQuote:
     @property
     def mid(self) -> float:
         return (self.best_bid + self.best_ask) / 2
-
-    @property
-    def spread_bps(self) -> float:
-        if self.mid <= 0:
-            return float("inf")
-        return ((self.best_ask - self.best_bid) / self.mid) * 10_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +107,29 @@ def _prior_spot_price(
     if idx < 0:
         return None
     return prices[idx]
+
+
+def _realized_volatility(
+    recv_times_ns: list[int],
+    prices: list[float],
+    current_index: int,
+    window_ms: int,
+) -> Decimal | None:
+    cutoff_ns = recv_times_ns[current_index] - window_ms * _NS_PER_MS
+    start = bisect_left(recv_times_ns, cutoff_ns, 0, current_index + 1)
+    window_prices = prices[start : current_index + 1]
+    if len(window_prices) < 3:
+        return None
+    returns = [
+        log(current / previous)
+        for previous, current in zip(window_prices, window_prices[1:], strict=False)
+        if previous > 0 and current > 0
+    ]
+    if len(returns) < 2:
+        return None
+    average = sum(returns) / len(returns)
+    variance = sum((value - average) ** 2 for value in returns) / len(returns)
+    return Decimal(str(sqrt(variance)))
 
 
 def _quote_at_or_before(
@@ -126,17 +168,53 @@ def _future_quotes(
     return tuple(sorted(result, key=lambda q: q.offset_ms))
 
 
+def _edge_inputs(
+    *,
+    config: BridgeConfig,
+    tick: SpotTick,
+    current_quote: BookQuote,
+    realized_volatility: Decimal | None,
+) -> tuple[float, float, str, int]:
+    if not config.has_fair_edge_inputs:
+        return 0.0, 0.0, "lag_proxy", 2**31 - 1
+
+    assert config.market_expiry_ts_ms is not None
+    assert config.threshold_price is not None
+    assert config.outcome_side is not None
+    expiry_ms = max(config.market_expiry_ts_ms - tick.source_ts_ms, 0)
+    if expiry_ms <= 0:
+        return 0.0, config.fee_cost_bps + config.extra_cost_bps, "fair_probability", 0
+
+    fair = FairPriceModel().estimate(
+        FairPriceInput(
+            spot_price=Decimal(str(tick.price)),
+            threshold_price=Decimal(str(config.threshold_price)),
+            seconds_to_expiry=Decimal(expiry_ms) / Decimal("1000"),
+            realized_volatility=realized_volatility,
+            momentum=None,
+        )
+    )
+    fair_probability = (
+        fair.fair_up_probability
+        if config.outcome_side is OutcomeSide.UP
+        else fair.fair_down_probability
+    )
+    gross_edge_bps = (float(fair_probability) - current_quote.best_ask) * 10_000
+    expected_cost_bps = config.fee_cost_bps + config.extra_cost_bps
+    return gross_edge_bps, expected_cost_bps, "fair_probability", expiry_ms
+
+
 def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeResult:
     """Convert persisted spot/book events into replayable repricing benchmark cases.
 
     Cross-venue sequencing uses the local monotonic receive clock. Exchange source timestamps are
-    not comparable across venues and must not be used to infer reaction latency.
+    not comparable across venues and are not used to infer reaction latency.
 
-    `estimated_edge_bps` is intentionally a research proxy: the absolute difference between the
-    100 ms source move and the destination market's 100 ms move. It is not a fair-value estimate
-    or expected PnL. Costs include the observed prediction-market spread plus configured fees and
-    extra execution cost. This keeps the bridge useful for lag measurement without pretending the
-    source move maps one-for-one to prediction-market probability.
+    Without threshold/expiry/outcome inputs, cases are lag-measurement only and carry
+    ``edge_basis='lag_proxy'``. With all three inputs, executable edge is expressed consistently as
+    absolute fair-probability basis points: ``(fair_probability - executable_ask) * 10_000``.
+    Configured fee and extra costs use the same absolute probability-bps basis. The ask is already
+    the executable price, so spread is not subtracted a second time.
     """
 
     spot_ticks: list[SpotTick] = []
@@ -222,6 +300,10 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
         if abs(source_100) < config.min_source_move_bps_100ms:
             continue
 
+        volatility = _realized_volatility(spot_recv_ns, spot_prices, idx, 30_000)
+        if volatility is None:
+            volatility = _realized_volatility(spot_recv_ns, spot_prices, idx, 5_000)
+
         candidate_tokens = (
             [config.token_id]
             if config.token_id is not None
@@ -262,17 +344,15 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
                 skipped_no_future_quote += 1
                 continue
 
-            lag_gap_bps = abs(source_100 - destination_100)
-            expected_cost_bps = (
-                current_quote.spread_bps
-                + config.fee_cost_bps
-                + config.extra_cost_bps
+            estimated_edge_bps, expected_cost_bps, edge_basis, expiry_ms = _edge_inputs(
+                config=config,
+                tick=tick,
+                current_quote=current_quote,
+                realized_volatility=volatility,
             )
-            expiry_ms = (
-                max(config.market_expiry_ts_ms - tick.source_ts_ms, 0)
-                if config.market_expiry_ts_ms is not None
-                else 2**31 - 1
-            )
+            if edge_basis == "lag_proxy":
+                estimated_edge_bps = abs(source_100 - destination_100)
+
             state = RepricingState(
                 source_move_bps_100ms=source_100,
                 source_move_bps_500ms=source_500,
@@ -284,10 +364,11 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
                     int((tick.recv_monotonic_ns - current_quote.recv_monotonic_ns) / _NS_PER_MS),
                     0,
                 ),
-                source_event_age_ms=max(tick.recv_wall_ts_ms - tick.source_ts_ms, 0),
-                estimated_edge_bps=lag_gap_bps,
+                source_event_age_ms=0,
+                estimated_edge_bps=estimated_edge_bps,
                 expected_cost_bps=expected_cost_bps,
                 time_to_expiry_ms=expiry_ms,
+                edge_basis=edge_basis,
             )
             cases.append(
                 RepricingCase(
