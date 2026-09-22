@@ -16,7 +16,7 @@ DEFAULT_HORIZONS_MS = (50, 100, 250, 500)
 
 @dataclass(frozen=True, slots=True)
 class FutureQuote:
-    offset_ms: int
+    offset_ms: float
     best_bid: float
     best_ask: float
 
