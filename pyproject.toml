@@ -26,6 +26,9 @@ dev = [
   "mypy>=1.10",
   "types-PyYAML>=6.0",
 ]
+jev = [
+  "typesafe-sdk>=0.7.1,<0.8",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
