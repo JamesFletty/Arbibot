@@ -60,6 +60,8 @@ class CaseEvaluation:
 @dataclass(frozen=True, slots=True)
 class ArmMetrics:
     candidates: int
+    latency_eligible_candidates: int
+    latency_disqualified_candidates: int
     labeled: int
     repricing_hits: int
     precision: float | None
@@ -151,21 +153,29 @@ def _metrics_for_arm(
     horizon_ms: int,
     arm: str,
 ) -> ArmMetrics:
-    selected: list[CaseEvaluation] = []
+    candidates: list[CaseEvaluation] = []
+    eligible: list[CaseEvaluation] = []
+    latencies: list[float] = []
+
     for evaluation in evaluations:
         matches_deterministic = arm == "deterministic" and evaluation.deterministic_candidate
         matches_jev = arm == "jev" and evaluation.jev_candidate is True
-        if matches_deterministic or matches_jev:
-            selected.append(evaluation)
+        if not (matches_deterministic or matches_jev):
+            continue
+        candidates.append(evaluation)
+        if evaluation.jev_model_latency_ms is not None:
+            latencies.append(evaluation.jev_model_latency_ms)
+        if arm == "jev":
+            latency = evaluation.jev_model_latency_ms
+            if latency is None or latency >= horizon_ms:
+                continue
+        eligible.append(evaluation)
 
     labels: list[HorizonLabel] = []
-    latencies: list[float] = []
-    for evaluation in selected:
+    for evaluation in eligible:
         label = next(label for label in evaluation.labels if label.horizon_ms == horizon_ms)
         if label.available:
             labels.append(label)
-        if evaluation.jev_model_latency_ms is not None:
-            latencies.append(evaluation.jev_model_latency_ms)
 
     hits = sum(label.repriced_with_source is True for label in labels)
     surviving_edges = [
@@ -174,7 +184,9 @@ def _metrics_for_arm(
         if label.edge_survived_bps is not None
     ]
     return ArmMetrics(
-        candidates=len(selected),
+        candidates=len(candidates),
+        latency_eligible_candidates=len(eligible),
+        latency_disqualified_candidates=len(candidates) - len(eligible),
         labeled=len(labels),
         repricing_hits=hits,
         precision=(hits / len(labels)) if labels else None,
