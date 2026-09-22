@@ -225,8 +225,8 @@ class JevRepricingGate:
             ),
             "executable": Noul(
                 instructions=(
-                    "Given the supplied spread, depth, fair-probability edge, data ages, and expiry, "
-                    "is the repricing edge likely executable before it disappears?"
+                    "Given the supplied spread, depth, fair-probability edge, data ages, "
+                    "and expiry, is the repricing edge likely executable before it disappears?"
                 )
             ),
         }
