@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 
 from arbibot.apps.commands import (
+    run_benchmark_repricing,
     run_paper,
     run_record_binance,
     run_replay,
@@ -53,6 +54,18 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--json", action="store_true")
     rb.add_argument("--dry-run", action="store_true")
 
+    br = sub.add_parser("benchmark-repricing")
+    br.add_argument("--store", required=True)
+    br.add_argument("--symbol", default="BTCUSDT")
+    br.add_argument("--token-id")
+    br.add_argument("--market-expiry-ts-ms", type=int)
+    br.add_argument("--fee-cost-bps", type=float, default=0.0)
+    br.add_argument("--extra-cost-bps", type=float, default=0.0)
+    br.add_argument("--min-source-move-bps-100ms", type=float, default=5.0)
+    br.add_argument("--jev", action="store_true")
+    br.add_argument("--jev-model", default="jev-latest")
+    br.add_argument("--json", action="store_true")
+
     return p
 
 
@@ -92,6 +105,19 @@ def main(argv: list[str] | None = None) -> int:
             as_json=args.json,
             dry_run=args.dry_run,
             config_path=args.config,
+        )
+    if args.command == "benchmark-repricing":
+        return run_benchmark_repricing(
+            store_path=args.store,
+            symbol=args.symbol,
+            token_id=args.token_id,
+            market_expiry_ts_ms=args.market_expiry_ts_ms,
+            fee_cost_bps=args.fee_cost_bps,
+            extra_cost_bps=args.extra_cost_bps,
+            min_source_move_bps_100ms=args.min_source_move_bps_100ms,
+            use_jev=args.jev,
+            jev_model=args.jev_model,
+            as_json=args.json,
         )
     return 1
 
