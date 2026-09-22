@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from statistics import mean
+from statistics import mean, median
 
 from arbibot.research.jev_repricing import (
     DeterministicLagGate,
@@ -39,6 +39,16 @@ class RepricingCase:
             return None
         return min(eligible, key=lambda q: q.offset_ms)
 
+    def first_reprice_delay_ms(self, min_reprice_bps: float = 1.0) -> float | None:
+        if min_reprice_bps < 0:
+            raise ValueError("min_reprice_bps must be non-negative")
+        source_move = self.state.source_move_bps_100ms
+        for quote in sorted(self.future_quotes, key=lambda q: q.offset_ms):
+            move_bps = ((quote.mid - self.current_mid) / self.current_mid) * 10_000
+            if abs(move_bps) >= min_reprice_bps and _same_direction(source_move, move_bps):
+                return quote.offset_ms
+        return None
+
 
 @dataclass(frozen=True, slots=True)
 class HorizonLabel:
@@ -55,6 +65,7 @@ class CaseEvaluation:
     deterministic_candidate: bool
     jev_candidate: bool | None
     jev_model_latency_ms: float | None
+    first_reprice_delay_ms: float | None
     labels: tuple[HorizonLabel, ...]
 
 
@@ -71,13 +82,44 @@ class ArmMetrics:
 
 
 @dataclass(frozen=True, slots=True)
+class ReactionDelayMetrics:
+    candidates: int
+    observed_reprices: int
+    censored_no_reprice: int
+    mean_delay_ms: float | None
+    p50_delay_ms: float | None
+    p90_delay_ms: float | None
+    p95_delay_ms: float | None
+    mean_model_latency_ms: float | None
+    model_beats_reprice_count: int | None
+    model_beats_reprice_rate: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class BenchmarkReport:
     deterministic: dict[int, ArmMetrics]
     jev: dict[int, ArmMetrics] | None
+    deterministic_reaction: ReactionDelayMetrics
+    jev_reaction: ReactionDelayMetrics | None
 
 
 def _same_direction(source_move_bps: float, destination_move_bps: float) -> bool:
     return source_move_bps != 0 and source_move_bps * destination_move_bps > 0
+
+
+def _percentile(values: list[float], percentile: float) -> float | None:
+    if not values:
+        return None
+    if not 0 <= percentile <= 1:
+        raise ValueError("percentile must be in [0, 1]")
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    position = percentile * (len(ordered) - 1)
+    lower = int(position)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = position - lower
+    return ordered[lower] * (1 - weight) + ordered[upper] * weight
 
 
 def label_case(
@@ -140,6 +182,7 @@ def evaluate_cases(
                 jev_model_latency_ms=(
                     jev_result.model_latency_ms if jev_result is not None else None
                 ),
+                first_reprice_delay_ms=case.first_reprice_delay_ms(min_reprice_bps),
                 labels=label_case(
                     case,
                     horizons_ms=horizons_ms,
@@ -198,6 +241,49 @@ def _metrics_for_arm(
     )
 
 
+def _reaction_metrics(
+    evaluations: Iterable[CaseEvaluation],
+    *,
+    arm: str,
+) -> ReactionDelayMetrics:
+    selected = [
+        row
+        for row in evaluations
+        if (arm == "deterministic" and row.deterministic_candidate)
+        or (arm == "jev" and row.jev_candidate is True)
+    ]
+    delays = [
+        row.first_reprice_delay_ms
+        for row in selected
+        if row.first_reprice_delay_ms is not None
+    ]
+    latencies = [
+        row.jev_model_latency_ms
+        for row in selected
+        if row.jev_model_latency_ms is not None
+    ]
+
+    beats: list[bool] = []
+    if arm == "jev":
+        for row in selected:
+            if row.first_reprice_delay_ms is None or row.jev_model_latency_ms is None:
+                continue
+            beats.append(row.jev_model_latency_ms < row.first_reprice_delay_ms)
+
+    return ReactionDelayMetrics(
+        candidates=len(selected),
+        observed_reprices=len(delays),
+        censored_no_reprice=len(selected) - len(delays),
+        mean_delay_ms=(mean(delays) if delays else None),
+        p50_delay_ms=(median(delays) if delays else None),
+        p90_delay_ms=_percentile(delays, 0.90),
+        p95_delay_ms=_percentile(delays, 0.95),
+        mean_model_latency_ms=(mean(latencies) if latencies else None),
+        model_beats_reprice_count=(sum(beats) if arm == "jev" else None),
+        model_beats_reprice_rate=(sum(beats) / len(beats) if beats else None),
+    )
+
+
 def build_report(
     evaluations: Iterable[CaseEvaluation],
     *,
@@ -210,9 +296,16 @@ def build_report(
         for horizon in horizons_ms
     }
     jev = None
+    jev_reaction = None
     if include_jev:
         jev = {
             horizon: _metrics_for_arm(rows, horizon_ms=horizon, arm="jev")
             for horizon in horizons_ms
         }
-    return BenchmarkReport(deterministic=deterministic, jev=jev)
+        jev_reaction = _reaction_metrics(rows, arm="jev")
+    return BenchmarkReport(
+        deterministic=deterministic,
+        jev=jev,
+        deterministic_reaction=_reaction_metrics(rows, arm="deterministic"),
+        jev_reaction=jev_reaction,
+    )
