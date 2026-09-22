@@ -161,7 +161,7 @@ class JevRepricingGate:
         owns_client = client is None
         if client is None:
             try:
-                from typesafe_sdk import Noul, TypeSafeClient
+                from typesafe_sdk import Noul, TypeSafeClient  # type: ignore[import-not-found]
             except ImportError as exc:
                 raise RuntimeError(
                     "Jev research support requires the optional 'jev' dependency: "
