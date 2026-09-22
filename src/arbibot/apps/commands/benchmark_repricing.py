@@ -77,6 +77,15 @@ def run_benchmark_repricing(
             f"quotes={bridge.summary.quotes_emitted} "
             f"jev={'on' if use_jev else 'off'}"
         )
+        reaction = report.deterministic_reaction
+        print(
+            "reaction-delay "
+            f"observed={reaction.observed_reprices} "
+            f"censored={reaction.censored_no_reprice} "
+            f"p50_ms={reaction.p50_delay_ms} "
+            f"p90_ms={reaction.p90_delay_ms} "
+            f"p95_ms={reaction.p95_delay_ms}"
+        )
         for horizon, metrics in report.deterministic.items():
             print(
                 f"deterministic horizon={horizon}ms candidates={metrics.candidates} "
@@ -92,4 +101,12 @@ def run_benchmark_repricing(
                     f"precision={metrics.precision} "
                     f"model_latency_ms={metrics.mean_model_latency_ms}"
                 )
+        if report.jev_reaction is not None:
+            jev_reaction = report.jev_reaction
+            print(
+                "jev-vs-reprice "
+                f"model_beats={jev_reaction.model_beats_reprice_count} "
+                f"rate={jev_reaction.model_beats_reprice_rate} "
+                f"model_latency_ms={jev_reaction.mean_model_latency_ms}"
+            )
     return 0

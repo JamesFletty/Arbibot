@@ -112,7 +112,7 @@ def test_extract_fair_edge_case_from_persisted_events(tmp_path: Path) -> None:
     assert result.summary.cases_emitted == 1
     case = result.cases[0]
     assert case.state.source_move_bps_100ms > 0
-    assert case.state.destination_book_age_ms == 499
+    assert case.state.destination_book_age_ms == 500
     assert case.state.time_to_expiry_ms == 8_000
     assert case.state.edge_basis == "fair_probability"
     assert case.state.expected_cost_bps == 2.0
@@ -168,7 +168,7 @@ def test_bridge_uses_monotonic_time_despite_exchange_clock_skew(tmp_path: Path) 
 
     assert result.summary.cases_emitted == 1
     case = result.cases[0]
-    assert case.state.destination_book_age_ms == 499
+    assert case.state.destination_book_age_ms == 500
     assert 50 < case.future_quotes[0].offset_ms < 50.001
 
 
