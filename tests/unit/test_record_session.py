@@ -38,7 +38,12 @@ class _MemoryStore(EventStore):
 
 
 class _FakeClient:
-    def __init__(self, source: str, events: list[BaseEvent], error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        source: str,
+        events: list[BaseEvent],
+        error: Exception | None = None,
+    ) -> None:
         self.source = source
         self._events = events
         self._error = error
