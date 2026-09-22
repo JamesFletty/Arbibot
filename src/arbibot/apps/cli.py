@@ -6,6 +6,7 @@ from arbibot.apps.commands import (
     run_benchmark_repricing,
     run_paper,
     run_record_binance,
+    run_record_polymarket,
     run_replay,
     run_status,
     run_validate_config,
@@ -53,6 +54,15 @@ def build_parser() -> argparse.ArgumentParser:
     rb.add_argument("--config")
     rb.add_argument("--json", action="store_true")
     rb.add_argument("--dry-run", action="store_true")
+
+    rp = sub.add_parser("record-polymarket")
+    rp.add_argument("--store", default="data/events.sqlite3")
+    rp.add_argument("--token-id", action="append", required=True)
+    rp.add_argument("--outcome", choices=["UP", "DOWN"])
+    rp.add_argument("--duration-seconds", type=int)
+    rp.add_argument("--max-events", type=int)
+    rp.add_argument("--json", action="store_true")
+    rp.add_argument("--dry-run", action="store_true")
 
     br = sub.add_parser("benchmark-repricing")
     br.add_argument("--store", required=True)
@@ -105,6 +115,16 @@ def main(argv: list[str] | None = None) -> int:
             as_json=args.json,
             dry_run=args.dry_run,
             config_path=args.config,
+        )
+    if args.command == "record-polymarket":
+        return run_record_polymarket(
+            store_path=args.store,
+            token_ids=args.token_id,
+            outcome=args.outcome,
+            duration_seconds=args.duration_seconds,
+            max_events=args.max_events,
+            as_json=args.json,
+            dry_run=args.dry_run,
         )
     if args.command == "benchmark-repricing":
         return run_benchmark_repricing(
