@@ -149,23 +149,33 @@ def _future_quotes(
     recv_monotonic_ns: int,
     horizons_ms: tuple[int, ...],
 ) -> tuple[FutureQuote, ...]:
-    result: list[FutureQuote] = []
-    seen_indices: set[int] = set()
+    """Retain the observed quote path through max horizon plus horizon boundary quotes."""
+    start = bisect_right(recv_times_ns, recv_monotonic_ns)
+    max_target_ns = recv_monotonic_ns + max(horizons_ms) * _NS_PER_MS
+    end = bisect_right(recv_times_ns, max_target_ns)
+    indices = set(range(start, end))
+
     for horizon_ms in horizons_ms:
         target_ns = recv_monotonic_ns + horizon_ms * _NS_PER_MS
         idx = bisect_left(recv_times_ns, target_ns)
-        if idx >= len(quotes) or idx in seen_indices:
-            continue
-        seen_indices.add(idx)
-        quote = quotes[idx]
-        result.append(
-            FutureQuote(
-                offset_ms=(quote.recv_monotonic_ns - recv_monotonic_ns) / _NS_PER_MS,
-                best_bid=quote.best_bid,
-                best_ask=quote.best_ask,
-            )
+        if idx < len(quotes):
+            indices.add(idx)
+
+    result = [
+        FutureQuote(
+            offset_ms=(quotes[idx].recv_monotonic_ns - recv_monotonic_ns) / _NS_PER_MS,
+            best_bid=quotes[idx].best_bid,
+            best_ask=quotes[idx].best_ask,
         )
-    return tuple(sorted(result, key=lambda q: q.offset_ms))
+        for idx in sorted(indices)
+        if quotes[idx].recv_monotonic_ns > recv_monotonic_ns
+    ]
+    return tuple(result)
+
+
+def _age_ms_ceiling(newer_ns: int, older_ns: int) -> int:
+    delta_ns = max(newer_ns - older_ns, 0)
+    return (delta_ns + _NS_PER_MS - 1) // _NS_PER_MS
 
 
 def _edge_inputs(
@@ -360,9 +370,9 @@ def extract_repricing_cases(store: EventStore, config: BridgeConfig) -> BridgeRe
                 destination_best_bid=current_quote.best_bid,
                 destination_best_ask=current_quote.best_ask,
                 destination_depth_ask=current_quote.ask_depth,
-                destination_book_age_ms=max(
-                    int((tick.recv_monotonic_ns - current_quote.recv_monotonic_ns) / _NS_PER_MS),
-                    0,
+                destination_book_age_ms=_age_ms_ceiling(
+                    tick.recv_monotonic_ns,
+                    current_quote.recv_monotonic_ns,
                 ),
                 source_event_age_ms=0,
                 estimated_edge_bps=estimated_edge_bps,
