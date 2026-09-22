@@ -7,6 +7,7 @@ from statistics import mean
 from arbibot.research.jev_repricing import (
     DeterministicLagGate,
     JevGateResult,
+    LagMeasurementGate,
     RepricingJudge,
     RepricingState,
 )
@@ -101,7 +102,9 @@ def label_case(
             continue
         move_bps = ((quote.mid - case.current_mid) / case.current_mid) * 10_000
         repriced = abs(move_bps) >= min_reprice_bps and _same_direction(source_move, move_bps)
-        edge_survived = case.state.net_edge_bps - abs(move_bps)
+        edge_survived = None
+        if case.state.has_executable_edge_basis:
+            edge_survived = case.state.net_edge_bps - abs(move_bps)
         labels.append(
             HorizonLabel(
                 horizon_ms=horizon_ms,
@@ -117,12 +120,12 @@ def label_case(
 def evaluate_cases(
     cases: Iterable[RepricingCase],
     *,
-    deterministic_gate: DeterministicLagGate | None = None,
+    deterministic_gate: LagMeasurementGate | DeterministicLagGate | None = None,
     jev_judge: RepricingJudge | None = None,
     horizons_ms: tuple[int, ...] = DEFAULT_HORIZONS_MS,
     min_reprice_bps: float = 1.0,
 ) -> list[CaseEvaluation]:
-    gate = deterministic_gate or DeterministicLagGate()
+    gate = deterministic_gate or LagMeasurementGate()
     evaluations: list[CaseEvaluation] = []
     for case in cases:
         deterministic = gate.evaluate(case.state)
