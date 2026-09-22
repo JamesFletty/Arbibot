@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Iterator, Sequence
 
 import pytest
 
@@ -19,7 +20,7 @@ class _MemoryStore(EventStore):
     def append(self, event: BaseEvent) -> None:
         self.events.append(event)
 
-    def append_many(self, events: list[BaseEvent]) -> None:
+    def append_many(self, events: Sequence[BaseEvent]) -> None:
         self.events.extend(events)
 
     def get_event(self, event_id: str) -> StoredEvent | None:
@@ -30,10 +31,10 @@ class _MemoryStore(EventStore):
         self,
         start_ts_ms: int | None = None,
         end_ts_ms: int | None = None,
-        event_types: list[str] | None = None,
-    ) -> AsyncIterator[StoredEvent]:
+        event_types: Sequence[str] | None = None,
+    ) -> Iterator[StoredEvent]:
         del start_ts_ms, end_ts_ms, event_types
-        raise NotImplementedError
+        return iter(())
 
 
 class _FakeClient:
@@ -59,7 +60,7 @@ class _FakeClient:
         if self._error is not None:
             raise self._error
         while True:
-            await __import__("asyncio").sleep(3600)
+            await asyncio.sleep(3600)
 
 
 def _spot(index: int) -> SpotTick:
