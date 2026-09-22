@@ -63,7 +63,8 @@ def run_benchmark_repricing(
         for horizon, metrics in report.deterministic.items():
             print(
                 f"deterministic horizon={horizon}ms candidates={metrics.candidates} "
-                f"precision={metrics.precision} surviving_edge_bps={metrics.mean_surviving_edge_bps}"
+                f"precision={metrics.precision} "
+                f"surviving_edge_bps={metrics.mean_surviving_edge_bps}"
             )
         if report.jev is not None:
             for horizon, metrics in report.jev.items():
