@@ -1,5 +1,30 @@
 # Arbibot Development Plan for Codex
 
+## Implementation status
+
+Checked against the tree on 2026-10-17. Phases 0–15 are implemented and covered by unit tests. Phase 16 is implemented as a guarded mock pilot: it cannot submit a venue order, and live trading stays disabled unless an explicit unlock config is constructed in-process. Phase 17 is not started.
+
+| Phase | Task | Status |
+| --- | --- | --- |
+| 0 | Scaffold | done |
+| 1 | Event store | done |
+| 2 | Ingestion interfaces | done |
+| 3 | Binance ingestor | done |
+| 4 | Candle builder | done |
+| 5 | Polymarket book builder | done |
+| 6 | Feature engine | done |
+| 7 | Fair-price model | done |
+| 8 | Edge and trade gates | done |
+| 9 | Paper execution | done |
+| 10 | Replay engine | done |
+| 11 | Risk engine | done |
+| 12 | Observability | done |
+| 13 | Live interface disabled | done |
+| 14 | Graph fusion | done |
+| 15 | External adapters | done |
+| 16 | Live pilot | done as a guarded mock; no venue order placement |
+| 17 | Passive orders | not started |
+
 ## Development Principle
 
 Build the research and measurement system first. Live trading comes later, if the replay and paper results justify it.
@@ -7,6 +32,8 @@ Build the research and measurement system first. Live trading comes later, if th
 Codex should work one phase at a time. Do not ask it to build the whole bot in one run.
 
 ## Phase 0 — Scaffold
+
+Status: done.
 
 Goal: create the project skeleton, schemas, config, time utilities, and tests.
 
@@ -28,6 +55,8 @@ Acceptance:
 
 ## Phase 1 — Event Store
 
+Status: done.
+
 Goal: append-only local persistence.
 
 Build:
@@ -46,6 +75,8 @@ Acceptance:
 
 ## Phase 2 — Ingestion Interfaces
 
+Status: done.
+
 Goal: define vendor-neutral contracts before touching live APIs.
 
 Build:
@@ -61,6 +92,8 @@ Acceptance:
 - no vendor payload leaks outside adapters
 
 ## Phase 3 — Binance Ingestor
+
+Status: done.
 
 Goal: normalize BTCUSDT spot stream data.
 
@@ -80,6 +113,8 @@ Acceptance:
 
 ## Phase 4 — Candle Builder
 
+Status: done.
+
 Goal: deterministic 5-minute bars from ticks.
 
 Build:
@@ -96,6 +131,8 @@ Acceptance:
 - late ticks handled deterministically
 
 ## Phase 5 — Polymarket Book Builder
+
+Status: done.
 
 Goal: reconstruct local UP/DOWN order books.
 
@@ -115,6 +152,8 @@ Acceptance:
 - weighted execution price is tested
 
 ## Phase 6 — Feature Engine
+
+Status: done.
 
 Goal: compute features for opportunity detection.
 
@@ -142,6 +181,8 @@ Acceptance:
 
 ## Phase 7 — Fair-Price Model
 
+Status: done.
+
 Goal: estimate UP/DOWN probability.
 
 Build:
@@ -158,6 +199,8 @@ Acceptance:
 - near-expiry behavior tested
 
 ## Phase 8 — Edge and Trade Gates
+
+Status: done.
 
 Goal: produce auditable trade/no-trade decisions.
 
@@ -191,6 +234,8 @@ Acceptance:
 
 ## Phase 9 — Paper Execution
 
+Status: done.
+
 Goal: simulate orders pessimistically.
 
 Build:
@@ -207,6 +252,8 @@ Acceptance:
 - paper fills are pessimistic by default
 
 ## Phase 10 — Replay Engine
+
+Status: done.
 
 Goal: replay persisted events deterministically.
 
@@ -237,6 +284,8 @@ Acceptance:
 
 ## Phase 11 — Risk Engine
 
+Status: done.
+
 Goal: independent veto layer.
 
 Build:
@@ -257,6 +306,8 @@ Acceptance:
 
 ## Phase 12 — Observability
 
+Status: done.
+
 Goal: make failures diagnosable.
 
 Build:
@@ -271,6 +322,8 @@ Acceptance:
 - failed/no-trade states can be diagnosed from logs and metrics
 
 ## Phase 13 — Live Interface Disabled
+
+Status: done.
 
 Goal: create live execution boundary without enabling trading.
 
@@ -290,6 +343,8 @@ Acceptance:
 - no accidental live path exists
 
 ## Phase 14 — Graph Fusion
+
+Status: done.
 
 Goal: add deterministic graph signal scoring.
 
@@ -312,6 +367,8 @@ Acceptance:
 
 ## Phase 15 — External Adapters
 
+Status: done.
+
 Goal: add secondary context inputs.
 
 Build:
@@ -327,6 +384,8 @@ Acceptance:
 - stale/malformed payloads are tested
 
 ## Phase 16 — Live Pilot
+
+Status: done as a guarded mock pilot. `LivePilotRunner` and `MockLiveExecutionClient` enforce unlock, size, health, and risk checks. They do not place venue orders. Live trading remains disabled by default.
 
 Goal: tiny controlled live mode.
 
@@ -350,6 +409,8 @@ Acceptance:
 - degraded states disable trading
 
 ## Phase 17 — Passive Orders
+
+Status: not started.
 
 Goal: add short-lived maker logic only if justified.
 
