@@ -4,6 +4,7 @@ import argparse
 
 from arbibot.apps.commands import (
     run_benchmark_repricing,
+    run_demo,
     run_paper,
     run_record_binance,
     run_record_polymarket,
@@ -75,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
     rs.add_argument("--max-events", type=int)
     rs.add_argument("--json", action="store_true")
     rs.add_argument("--dry-run", action="store_true")
+
+    demo = sub.add_parser("demo", help="Run the offline synthetic end-to-end demo")
+    demo.add_argument("--store", default="data/offline_demo.sqlite3")
+    demo.add_argument("--config", default="configs/paper.yaml")
+    demo.add_argument("--force", action="store_true")
+    demo.add_argument("--json", action="store_true")
 
     br = sub.add_parser("benchmark-repricing")
     br.add_argument("--store", required=True)
@@ -151,6 +158,13 @@ def main(argv: list[str] | None = None) -> int:
             max_events=args.max_events,
             as_json=args.json,
             dry_run=args.dry_run,
+        )
+    if args.command == "demo":
+        return run_demo(
+            store_path=args.store,
+            config_path=args.config,
+            force=args.force,
+            as_json=args.json,
         )
     if args.command == "benchmark-repricing":
         return run_benchmark_repricing(
